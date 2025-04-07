@@ -60,48 +60,86 @@ class TechnicalIndicators:
         """
         Calculates the Average True Range (ATR).
         """
-        high_low = self.high - self.low
-        high_close = (self.high - self.close.shift()).abs()
-        low_close = (self.low - self.close.shift()).abs()
+        # Reverse the order so the oldest date comes first
+        high_series = self.high.iloc[::-1]
+        low_series = self.low.iloc[::-1]
+        close_series = self.close.iloc[::-1]
+
+        # Compute True Range
+        high_low = high_series - low_series
+        high_close = (high_series - close_series.shift()).abs()
+        low_close = (low_series - close_series.shift()).abs()
 
         true_range = np.maximum(high_low, np.maximum(high_close, low_close))
-        atr = true_range.rolling(window=period).mean()
 
-        return atr
+        # Compute ATR on reversed data
+        atr = true_range.rolling(window=period, min_periods=1).mean()
+
+        # Reverse the result back to match the original order
+        return atr.iloc[::-1]
+
 
     def calculate_rsi(self, period: int = 14) -> pd.Series:
-        """
-        Calculates the Relative Strength Index (RSI).
-        """
-        delta = self.close.diff()
-
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-
+        # Reverse the series so that the oldest date comes first
+        close_series = self.close.iloc[::-1]
+        
+        # Calculate the change in closing price
+        delta = close_series.diff()
+        
+        # Separate gains and losses
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        
+        # Calculate rolling averages (you might want min_periods=period 
+        # if you require a full window before computing an RSI)
         avg_gain = gain.rolling(window=period, min_periods=1).mean()
         avg_loss = loss.rolling(window=period, min_periods=1).mean()
-
+        
+        # Calculate the relative strength and then the RSI
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
+        
+        # Set the first period-1 values to NaN because there's not enough data,
+        # which now will be at the bottom of the reversed series.
+        rsi.iloc[:period - 1] = np.nan
+        
+        # Reverse the result back to the original order (newest first)
+        return rsi.iloc[::-1]
 
-        return rsi
 
     def calculate_stochastic_oscillator(self, period: int = 14) -> pd.Series:
         """
         Calculates the Stochastic Oscillator (%K).
         """
-        lowest_low = self.low.rolling(window=period).min()
-        highest_high = self.high.rolling(window=period).max()
+        # Reverse the series so that the oldest date comes first
+        low_series = self.low.iloc[::-1]
+        high_series = self.high.iloc[::-1]
+        close_series = self.close.iloc[::-1]
+        
+        # Calculate the rolling minimum and maximum on reversed data
+        lowest_low = low_series.rolling(window=period, min_periods=1).min()
+        highest_high = high_series.rolling(window=period, min_periods=1).max()
+        
+        # Calculate the Stochastic Oscillator on reversed data
+        stochastic_k = 100 * (close_series - lowest_low) / (highest_high - lowest_low)
+        
+        # Reverse the result back to the original order
+        return stochastic_k.iloc[::-1]
 
-        stochastic_k = 100 * (self.close - lowest_low) / (highest_high - lowest_low)
-
-        return stochastic_k
 
     def calculate_sma(self, period: int) -> pd.Series:
         """
         Calculates the Simple Moving Average (SMA).
         """
-        return self.close.rolling(window=period).mean()
+        # Reverse the series so that the oldest date comes first
+        close_series = self.close.iloc[::-1]
+
+        # Compute the moving average on reversed data
+        sma = close_series.rolling(window=period, min_periods=1).mean()
+
+        # Reverse the result back to match the original order
+        return sma.iloc[::-1]
+
 
     def calculate_vwap(self) -> pd.Series:
         """
@@ -112,66 +150,107 @@ class TechnicalIndicators:
 
         return vwap
 
-    def calculate_macd(self, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> pd.Series:
+    def calculate_macd(self, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9):
         """
         Calculates the Moving Average Convergence Divergence (MACD).
         """
-        fast_ema = self.close.ewm(span=fast_period, adjust=False).mean()
-        slow_ema = self.close.ewm(span=slow_period, adjust=False).mean()
+        # Reverse the closing prices to be in chronological order
+        close_series = self.close.iloc[::-1]
 
+        # Compute EMAs on the correctly ordered data
+        fast_ema = close_series.ewm(span=fast_period, adjust=False).mean()
+        slow_ema = close_series.ewm(span=slow_period, adjust=False).mean()
+
+        # Calculate MACD on reversed data
         macd = fast_ema - slow_ema
         signal_line = macd.ewm(span=signal_period, adjust=False).mean()
 
-        return macd, signal_line
+        # Reverse the results back to the original order (most recent first)
+        return macd.iloc[::-1], signal_line.iloc[::-1]
+
 
     def calculate_adx(self, period: int = 14) -> pd.Series:
         """
         Calculates the Average Directional Index (ADX).
         """
-        tr = pd.concat([self.high - self.low, 
-                        (self.high - self.close.shift()).abs(), 
-                        (self.low - self.close.shift()).abs()], axis=1)
+        # Reverse the data so the oldest date comes first
+        high = self.high.iloc[::-1]
+        low = self.low.iloc[::-1]
+        close = self.close.iloc[::-1]
+        
+        # Calculate True Range (TR)
+        tr = pd.concat([
+            high - low, 
+            (high - close.shift()).abs(), 
+            (low - close.shift()).abs()
+        ], axis=1)
         true_range = tr.max(axis=1)
 
-        plus_dm = self.high.diff()
-        minus_dm = self.low.diff()
+        # Calculate directional movements
+        plus_dm = high.diff()
+        minus_dm = low.diff()
 
         plus_dm[plus_dm < 0] = 0
         minus_dm[minus_dm > 0] = 0
 
-        smoothed_plus_dm = plus_dm.rolling(window=period).sum()
-        smoothed_minus_dm = minus_dm.rolling(window=period).sum()
-        smoothed_tr = true_range.rolling(window=period).sum()
+        # Smooth the values using rolling sums
+        smoothed_plus_dm = plus_dm.rolling(window=period, min_periods=1).sum()
+        smoothed_minus_dm = minus_dm.rolling(window=period, min_periods=1).sum()
+        smoothed_tr = true_range.rolling(window=period, min_periods=1).sum()
 
+        # Calculate the directional indicators (DI)
         plus_di = 100 * (smoothed_plus_dm / smoothed_tr)
         minus_di = 100 * (smoothed_minus_dm / smoothed_tr)
 
-        adx = 100 * ((plus_di - minus_di).abs().rolling(window=period).mean())
+        # Calculate ADX as the smoothed average of the absolute difference between DI's
+        adx = 100 * ((plus_di - minus_di).abs().rolling(window=period, min_periods=1).mean())
 
-        return adx
+        # Reverse the result back to the original order (newest first)
+        return adx.iloc[::-1]
+
 
     def calculate_cci(self, period: int = 14) -> pd.Series:
         """
         Calculates the Commodity Channel Index (CCI).
         """
-        typical_price = (self.high + self.low + self.close) / 3
-        moving_average = typical_price.rolling(window=period).mean()
-        mean_deviation = typical_price.subtract(moving_average).abs().rolling(window=period).mean()
+        # Reverse the series so the oldest date comes first
+        high_series = self.high.iloc[::-1]
+        low_series = self.low.iloc[::-1]
+        close_series = self.close.iloc[::-1]
 
+        # Compute the typical price on reversed data
+        typical_price = (high_series + low_series + close_series) / 3
+
+        # Compute moving average and mean deviation on reversed data
+        moving_average = typical_price.rolling(window=period, min_periods=1).mean()
+        mean_deviation = typical_price.subtract(moving_average).abs().rolling(window=period, min_periods=1).mean()
+
+        # Compute CCI on reversed data
         cci = (typical_price - moving_average) / (0.015 * mean_deviation)
 
-        return cci
+        # Reverse the result back to the original order
+        return cci.iloc[::-1]
+
 
     def calculate_williams_r(self, period: int = 14) -> pd.Series:
         """
         Calculates the Williams %R.
         """
-        highest_high = self.high.rolling(window=period).max()
-        lowest_low = self.low.rolling(window=period).min()
+        # Reverse the series so the oldest date comes first
+        high_series = self.high.iloc[::-1]
+        low_series = self.low.iloc[::-1]
+        close_series = self.close.iloc[::-1]
 
-        williams_r = (highest_high - self.close) / (highest_high - lowest_low) * -100
+        # Compute rolling highest high and lowest low on reversed data
+        highest_high = high_series.rolling(window=period, min_periods=1).max()
+        lowest_low = low_series.rolling(window=period, min_periods=1).min()
 
-        return williams_r
+        # Compute Williams %R on reversed data
+        williams_r = (highest_high - close_series) / (highest_high - lowest_low) * -100
+
+        # Reverse the result back to the original order
+        return williams_r.iloc[::-1]
+
 
     def calculate_parabolic_sar(self, initial_af: float = 0.02, max_af: float = 0.2, period: int = 14) -> pd.Series:
         """
@@ -215,28 +294,49 @@ class TechnicalIndicators:
         """
         Calculates the On-Balance Volume (OBV).
         """
-        obv = pd.Series(index=self.close.index)
-        obv.iloc[0] = 0
+        # Reverse the data so the oldest date comes first
+        close_series = self.close.iloc[::-1]
+        volume_series = self.volume.iloc[::-1]
 
-        for i in range(1, len(self.close)):
-            if self.close[i] > self.close[i - 1]:
-                obv.iloc[i] = obv.iloc[i - 1] + self.volume[i]
-            elif self.close[i] < self.close[i - 1]:
-                obv.iloc[i] = obv.iloc[i - 1] - self.volume[i]
+        # Initialize OBV
+        obv = pd.Series(index=close_series.index, dtype=float)
+        obv.iloc[0] = 0  # Start at 0
+
+        # Compute OBV using the correct order
+        for i in range(1, len(close_series)):
+            if close_series.iloc[i] > close_series.iloc[i - 1]:
+                obv.iloc[i] = obv.iloc[i - 1] + volume_series.iloc[i]
+            elif close_series.iloc[i] < close_series.iloc[i - 1]:
+                obv.iloc[i] = obv.iloc[i - 1] - volume_series.iloc[i]
             else:
                 obv.iloc[i] = obv.iloc[i - 1]
 
-        return obv
+        # Reverse the result back to the original order
+        return obv.iloc[::-1]
+
 
     def calculate_cmf(self, period: int = 20) -> pd.Series:
         """
         Calculates the Chaikin Money Flow (CMF).
         """
-        money_flow_multiplier = ((self.close - self.low) - (self.high - self.close)) / (self.high - self.low)
-        money_flow_volume = money_flow_multiplier * self.volume
-        cmf = money_flow_volume.rolling(window=period).sum() / self.volume.rolling(window=period).sum()
+        # Reverse the series so the oldest date comes first
+        high_series = self.high.iloc[::-1]
+        low_series = self.low.iloc[::-1]
+        close_series = self.close.iloc[::-1]
+        volume_series = self.volume.iloc[::-1]
 
-        return cmf
+        # Compute money flow multiplier on reversed data
+        money_flow_multiplier = ((close_series - low_series) - (high_series - close_series)) / (high_series - low_series)
+
+        # Compute money flow volume on reversed data
+        money_flow_volume = money_flow_multiplier * volume_series
+
+        # Compute rolling sums on reversed data
+        cmf = money_flow_volume.rolling(window=period, min_periods=1).sum() / volume_series.rolling(window=period, min_periods=1).sum()
+
+        # Reverse the result back to the original order
+        return cmf.iloc[::-1]
+
 
     def process_all(self) -> pd.DataFrame:
         """
@@ -264,4 +364,15 @@ class TechnicalIndicators:
 
 # Main block to write technical indicators to TQQQ_data.csv for training
 if __name__ == "__main__":
-    pass
+    
+    df = pd.read_csv("data/TQQQ_data.csv")
+    
+    TQQQ_close = df["TQQQ Close"][0:1240]
+    TQQQ_high = df["TQQQ High"][0:1240]
+    TQQQ_low = df["TQQQ Low"][0:1240]
+    TQQQ_volume = df["TQQQ Volume (M)"][0:1240]
+
+    tec_i = TechnicalIndicators(TQQQ_high, TQQQ_low, TQQQ_close, TQQQ_volume)
+
+    tec_i.process_all().to_csv("data/TQQQ_data_aug.csv")
+    print("Processed all indicators and saved to data/TQQQ_data_aug.csv.")
